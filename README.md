@@ -1,6 +1,6 @@
 # No Skill Break Timer
 
-A World of Warcraft addon that displays a random meme image whenever a break timer is triggered through DBM, BigWigs, or Blizzard's built-in countdown. Built for WoW Midnight (12.0.1).
+Displays a random meme image whenever a break timer is triggered through DBM, BigWigs, or Blizzard's built-in countdown. Built for WoW Midnight (12.0.1).
 
 ## Installation
 
