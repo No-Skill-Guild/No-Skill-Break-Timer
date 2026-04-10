@@ -3,7 +3,7 @@
 -- Uses multiple detection methods for maximum compatibility
 
 local ADDON_NAME = "NoSkillBreakTimer"
-local MEME_PATH = "Interface\\Memes\\"
+local MEME_PATH = "Interface\\AddOns\\NoSkillBreakTimer\\Memes\\"
 
 local MEME_FILES = {
     "Bingo1",
