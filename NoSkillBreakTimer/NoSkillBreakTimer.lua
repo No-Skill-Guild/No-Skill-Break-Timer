@@ -1,5 +1,6 @@
 -- No Skill Break Timer
 -- Hooks into DBM, BigWigs, and Blizzard countdown to show a meme during breaks
+-- Uses multiple detection methods for maximum compatibility
 
 local ADDON_NAME = "NoSkillBreakTimer"
 local MEME_PATH = "Interface\\Memes\\"
@@ -114,10 +115,16 @@ resizer:SetScript("OnMouseUp", function()
 end)
 
 ---------------------------------------------------------------------
--- Meme selection
+-- State
 ---------------------------------------------------------------------
+local isRunning = false
+local isTesting = false
+local hideTimer = nil
 local lastMemeIndex = 0
 
+---------------------------------------------------------------------
+-- Meme selection
+---------------------------------------------------------------------
 local function ShowRandomMeme()
     local idx
     if #MEME_FILES == 1 then
@@ -134,18 +141,13 @@ end
 ---------------------------------------------------------------------
 -- Core start/stop
 ---------------------------------------------------------------------
-local isRunning = false
-local isTesting = false
-local hideTimer = nil
-
-local function StartBreak(seconds)
+local function StartBreak(seconds, source)
     isTesting = false
     isRunning = true
     headerText:SetText("|cff00ff00BREAK TIME|r")
     ShowRandomMeme()
     frame:Show()
 
-    -- Auto-hide when break ends
     if hideTimer then
         hideTimer:Cancel()
     end
@@ -177,62 +179,139 @@ local function ToggleTest()
 end
 
 ---------------------------------------------------------------------
--- HOOK 1: DBM
+-- HOOK 1: DBM Callback API (the official public API)
+-- DBM fires "DBM_TimerStart" with simpleType "break"
 ---------------------------------------------------------------------
-local function HookDBM()
-    if DBM and DBM.StartBreakTimer then
-        hooksecurefunc(DBM, "StartBreakTimer", function(self, timer)
-            if timer and timer > 0 then
-                StartBreak(timer)
+local function HookDBMCallbacks()
+    if not DBM then return end
+
+    -- Method A: RegisterCallback (modern DBM public API)
+    if DBM.RegisterCallback then
+        local callbackHandler = {}
+        DBM:RegisterCallback("DBM_TimerStart", function(event, id, msg, timer, icon, timerType, spellId, dbmType, ...)
+            -- dbmType/simpleType for break timers is "break"
+            if timerType == "break" or (msg and type(msg) == "string" and msg:lower():find("break")) then
+                    StartBreak(timer, "DBM callback")
             end
         end)
     end
-    C_ChatInfo.RegisterAddonMessagePrefix("D4")
-end
 
-local dbmListener = CreateFrame("Frame")
-dbmListener:RegisterEvent("CHAT_MSG_ADDON")
-dbmListener:SetScript("OnEvent", function(self, event, prefix, msg, channel, sender)
-    if prefix ~= "D4" then return end
-    local btTime = msg:match("^BT\t(%d+)")
-    if btTime then
-        local seconds = tonumber(btTime)
-        if seconds and seconds > 0 and not isRunning then
-            StartBreak(seconds)
+    -- Method B: hooksecurefunc on known break timer functions
+    -- These receive time in MINUTES from /dbm break
+    for _, funcName in ipairs({"StartBreakTimer", "breakTimerStart", "CreateBreakTimer"}) do
+        if DBM[funcName] then
+            hooksecurefunc(DBM, funcName, function(self, timer, ...)
+                if timer and timer > 0 then
+                    -- DBM break functions receive minutes; convert to seconds
+                    local seconds = timer <= 60 and timer * 60 or timer
+                    StartBreak(seconds, "DBM " .. funcName)
+                end
+            end)
+            break
         end
     end
+end
+
+---------------------------------------------------------------------
+-- HOOK 2: Addon message listener (D4 and D5 prefixes)
+-- DBM break timer sync: "BT\t<minutes>"
+-- DBM's /dbm break command takes MINUTES and syncs the raw value
+---------------------------------------------------------------------
+local addonListener = CreateFrame("Frame")
+addonListener:RegisterEvent("CHAT_MSG_ADDON")
+addonListener:SetScript("OnEvent", function(self, event, prefix, msg, channel, sender)
+    if prefix ~= "D4" and prefix ~= "D5" then return end
+
+    -- Break timer start: BT\t<minutes>
+    local btTime = msg:match("^BT\t(%d+)")
+    if btTime then
+        local minutes = tonumber(btTime)
+        if minutes and minutes > 0 then
+            StartBreak(minutes * 60, prefix .. " addon msg")
+        end
+        return
+    end
+
+    -- Break timer cancel
     if msg:match("^BTC") and isRunning then
         StopBreak()
     end
 end)
 
 ---------------------------------------------------------------------
--- HOOK 2: BigWigs
+-- HOOK 3: BigWigs break bar via callback system
+-- BigWigs_StartBar args: event, module, key, text, time, icon
+-- The "text" contains the display string (e.g. "Break"), key may be
+-- numeric or a string. Check both.
 ---------------------------------------------------------------------
+local bigWigsHooked = false
+
 local function HookBigWigs()
-    if BigWigsLoader then
-        local plugin = {}
-        BigWigsLoader.RegisterMessage(plugin, "BigWigs_StartBar", function(event, mod, key, text, time, icon)
-            if key and type(key) == "string" and key:find("[Bb]reak") then
-                StartBreak(time)
+    if bigWigsHooked then return end
+
+    -- Try BigWigsLoader first (available early), then BigWigs global
+    local registrar = BigWigsLoader or BigWigs
+    if not registrar or not registrar.RegisterMessage then return end
+
+    local plugin = {}
+    registrar.RegisterMessage(plugin, "BigWigs_StartBar", function(event, mod, key, text, time, icon)
+        local isBreak = false
+        -- Check key
+        if key and type(key) == "string" and key:lower():find("break") then
+            isBreak = true
+        end
+        -- Check display text
+        if text and type(text) == "string" and text:lower():find("break") then
+            isBreak = true
+        end
+        if isBreak and time and time > 0 then
+            StartBreak(time, "BigWigs bar")
+        end
+    end)
+    registrar.RegisterMessage(plugin, "BigWigs_StopBar", function(event, mod, text)
+        if isRunning then
+            local isBreak = false
+            if text and type(text) == "string" and text:lower():find("break") then
+                isBreak = true
             end
-        end)
-        BigWigsLoader.RegisterMessage(plugin, "BigWigs_StopBar", function(event, mod, text)
-            if text and type(text) == "string" and text:find("[Bb]reak") and isRunning then
+            if isBreak then
                 StopBreak()
             end
-        end)
-    end
+        end
+    end)
+    bigWigsHooked = true
 end
 
 ---------------------------------------------------------------------
--- HOOK 3: Blizzard countdown (>=60s)
+-- HOOK 4: Blizzard countdown (C_PartyInfo.DoCountdown)
+-- DBM uses this internally for break timers in Midnight
 ---------------------------------------------------------------------
 local countdownListener = CreateFrame("Frame")
 countdownListener:RegisterEvent("START_TIMER")
 countdownListener:SetScript("OnEvent", function(self, event, timerType, timeRemaining, totalTime)
-    if timerType == 2 and totalTime and totalTime >= 60 and not isRunning then
-        StartBreak(totalTime)
+    -- timerType 2 = party countdown
+    -- Trigger on any countdown >= 60s as a likely break timer
+    if totalTime and totalTime >= 60 then
+        StartBreak(totalTime, "Blizzard countdown")
+    end
+end)
+
+---------------------------------------------------------------------
+-- HOOK 5: Chat message detection (fallback)
+-- Catches DBM/BigWigs break announcements in raid warning
+---------------------------------------------------------------------
+local chatListener = CreateFrame("Frame")
+chatListener:RegisterEvent("CHAT_MSG_RAID_WARNING")
+chatListener:SetScript("OnEvent", function(self, event, msg, sender)
+    if msg then
+        -- DBM break start messages like "Break time started" or "Break Starting Now"
+        local breakMin = msg:match("[Bb]reak.-(%d+)%s*min")
+        if breakMin then
+            local minutes = tonumber(breakMin)
+            if minutes and minutes > 0 then
+                StartBreak(minutes * 60, "raid warning")
+            end
+        end
     end
 end)
 
@@ -298,7 +377,6 @@ SlashCmdList["NSBT"] = function(msg)
         if NSBT_LockCheck then
             NSBT_LockCheck:SetChecked(NoSkillBreakTimerDB.locked)
         end
-        print("|cff00ff00[NSBT]|r Frame " .. (NoSkillBreakTimerDB.locked and "locked" or "unlocked"))
     elseif cmd == "test" then
         ToggleTest()
     else
@@ -331,9 +409,32 @@ initFrame:SetScript("OnEvent", function(self, event)
     end
 
     ApplyLockState()
+
+    -- Register addon message prefixes
     C_ChatInfo.RegisterAddonMessagePrefix("D4")
-    HookDBM()
+    C_ChatInfo.RegisterAddonMessagePrefix("D5")
+
+    -- Hook DBM and BigWigs
+    HookDBMCallbacks()
     HookBigWigs()
+
+    -- If DBM or BigWigs loads later, hook them then
+    if not DBM or not bigWigsHooked then
+        local lateLoader = CreateFrame("Frame")
+        lateLoader:RegisterEvent("ADDON_LOADED")
+        lateLoader:SetScript("OnEvent", function(self2, ev, addon)
+            if DBM then
+                HookDBMCallbacks()
+            end
+            if not bigWigsHooked and (BigWigsLoader or BigWigs) then
+                HookBigWigs()
+            end
+            if DBM and bigWigsHooked then
+                self2:UnregisterAllEvents()
+            end
+        end)
+    end
+
     settingsCategory = CreateOptionsPanel()
     self:UnregisterAllEvents()
 end)
