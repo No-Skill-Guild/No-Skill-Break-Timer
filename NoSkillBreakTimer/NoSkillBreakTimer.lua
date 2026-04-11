@@ -223,6 +223,11 @@ local function HookDBMCallbacks()
                     StartBreak(timer, "DBM callback")
             end
         end)
+        DBM:RegisterCallback("DBM_TimerStop", function(event, id)
+            if id and type(id) == "string" and id:lower():find("break") then
+                StopBreak()
+            end
+        end)
     end
 
     -- Method B: hooksecurefunc on known break timer functions
@@ -255,11 +260,13 @@ addonListener:SetScript("OnEvent", function(self, event, prefix, msg, channel, s
         local minutes = tonumber(btTime)
         if minutes and minutes > 0 then
             StartBreak(minutes * 60, prefix .. " addon msg")
+        elseif minutes == 0 then
+            StopBreak()
         end
         return
     end
 
-    if msg:match("^BTC") and isRunning then
+    if msg:match("^BTC") then
         StopBreak()
     end
 end)
