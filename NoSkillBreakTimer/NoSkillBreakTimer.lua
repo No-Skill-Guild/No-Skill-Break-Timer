@@ -22,6 +22,23 @@ local MEME_FILES = {
     "Tehlmar1",
     "Tek1",
     "Tek2",
+	"Tek3",
+	"Tek4",
+	"Gornag",
+	"Gornag2",
+	"Wood",
+	"Denied",
+	"Paint1",
+	"Paint2",
+	"Paint3",
+	"Paint4",
+	"Paint5",
+	"Paint6",
+	"Paint7",
+	"Paint8",
+	"Paint9",
+	"Paint10",
+	"Paint11",
 }
 
 local MIN_SIZE = 200
