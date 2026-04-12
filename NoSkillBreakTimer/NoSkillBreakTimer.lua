@@ -177,6 +177,10 @@ end
 -- Core start/stop
 ---------------------------------------------------------------------
 local function StartBreak(seconds, source)
+    seconds = tonumber(seconds)
+    if not seconds or seconds <= 0 then return end
+    if InCombatLockdown() or C_InstanceEncounter.IsEncounterInProgress() then return end
+
     isTesting = false
     isRunning = true
     headerText:SetText("|cff00ff00BREAK TIME|r")
@@ -185,9 +189,12 @@ local function StartBreak(seconds, source)
 
     if hideTimer then
         hideTimer:Cancel()
+        hideTimer = nil
     end
+
     hideTimer = C_Timer.NewTimer(seconds, function()
         isRunning = false
+        hideTimer = nil
         frame:Hide()
     end)
 end
@@ -205,6 +212,9 @@ local function ToggleTest()
     if isTesting then
         isTesting = false
         frame:Hide()
+    elseif isRunning then
+        -- Don't start test mode while a real break is active
+        return
     else
         isTesting = true
         headerText:SetText("|cff00ff00BREAK TIME|r")
@@ -226,29 +236,29 @@ local function ResetPosition()
 end
 
 ---------------------------------------------------------------------
--- HOOK 1: DBM Callback API (the official public API)
--- DBM fires "DBM_TimerStart" with simpleType "break"
+-- HOOK 1: DBM Callback API
+-- Strict: only trust timerType == "break", no substring matching
 ---------------------------------------------------------------------
-local function HookDBMCallbacks()
-    if not DBM then return end
+local dbmHooked = false
 
-    -- Method A: RegisterCallback (modern DBM public API)
+local function HookDBMCallbacks()
+    if dbmHooked or not DBM then return end
+    dbmHooked = true
+
     if DBM.RegisterCallback then
-        local callbackHandler = {}
         DBM:RegisterCallback("DBM_TimerStart", function(event, id, msg, timer, icon, timerType, spellId, dbmType, ...)
-            if timerType == "break" or (msg and type(msg) == "string" and msg:lower():find("break")) then
-                    StartBreak(timer, "DBM callback")
+            if timerType == "break" and timer and timer > 0 then
+                StartBreak(timer, "DBM callback")
             end
         end)
         DBM:RegisterCallback("DBM_TimerStop", function(event, id)
-            if id and type(id) == "string" and id:lower():find("break") then
+            if id and type(id) == "string" and id:lower():find("^break") then
                 StopBreak()
             end
         end)
     end
 
-    -- Method B: hooksecurefunc on known break timer functions
-    -- These receive time in MINUTES from /dbm break
+    -- hooksecurefunc on known break timer functions (receive minutes)
     for _, funcName in ipairs({"StartBreakTimer", "breakTimerStart", "CreateBreakTimer"}) do
         if DBM[funcName] then
             hooksecurefunc(DBM, funcName, function(self, timer, ...)
@@ -264,8 +274,7 @@ end
 
 ---------------------------------------------------------------------
 -- HOOK 2: Addon message listener (D4 and D5 prefixes)
--- DBM break timer sync: "BT\t<minutes>"
--- DBM's /dbm break command takes MINUTES and syncs the raw value
+-- DBM syncs break timer as "BT\t<minutes>"
 ---------------------------------------------------------------------
 local addonListener = CreateFrame("Frame")
 addonListener:RegisterEvent("CHAT_MSG_ADDON")
@@ -290,8 +299,15 @@ end)
 
 ---------------------------------------------------------------------
 -- HOOK 3: BigWigs break bar via callback system
+-- Matches any text starting with "Break". Combat guard in StartBreak
+-- is the primary protection against false positives.
 ---------------------------------------------------------------------
 local bigWigsHooked = false
+
+local function IsLikelyBreakText(s)
+    if type(s) ~= "string" then return false end
+    return s:lower():find("^break") ~= nil
+end
 
 local function HookBigWigs()
     if bigWigsHooked then return end
@@ -301,61 +317,20 @@ local function HookBigWigs()
 
     local plugin = {}
     registrar.RegisterMessage(plugin, "BigWigs_StartBar", function(event, mod, key, text, time, icon)
-        local isBreak = false
-        if key and type(key) == "string" and key:lower():find("break") then
-            isBreak = true
-        end
-        if text and type(text) == "string" and text:lower():find("break") then
-            isBreak = true
-        end
-        if isBreak and time and time > 0 then
+        if (IsLikelyBreakText(key) or IsLikelyBreakText(text)) and time and time > 0 then
             StartBreak(time, "BigWigs bar")
         end
     end)
     registrar.RegisterMessage(plugin, "BigWigs_StopBar", function(event, mod, text)
-        if isRunning then
-            local isBreak = false
-            if text and type(text) == "string" and text:lower():find("break") then
-                isBreak = true
-            end
-            if isBreak then
-                StopBreak()
-            end
+        if isRunning and IsLikelyBreakText(text) then
+            StopBreak()
         end
     end)
     bigWigsHooked = true
 end
 
 ---------------------------------------------------------------------
--- HOOK 4: Blizzard countdown (C_PartyInfo.DoCountdown)
----------------------------------------------------------------------
-local countdownListener = CreateFrame("Frame")
-countdownListener:RegisterEvent("START_TIMER")
-countdownListener:SetScript("OnEvent", function(self, event, timerType, timeRemaining, totalTime)
-    if totalTime and totalTime >= 60 then
-        StartBreak(totalTime, "Blizzard countdown")
-    end
-end)
-
----------------------------------------------------------------------
--- HOOK 5: Chat message detection (fallback)
----------------------------------------------------------------------
-local chatListener = CreateFrame("Frame")
-chatListener:RegisterEvent("CHAT_MSG_RAID_WARNING")
-chatListener:SetScript("OnEvent", function(self, event, msg, sender)
-    if msg then
-        local breakMin = msg:match("[Bb]reak.-(%d+)%s*min")
-        if breakMin then
-            local minutes = tonumber(breakMin)
-            if minutes and minutes > 0 then
-                StartBreak(minutes * 60, "raid warning")
-            end
-        end
-    end
-end)
-
----------------------------------------------------------------------
--- Preview frame (shared popup for previewing memes in options)
+-- Preview frame (popup for previewing memes in options)
 ---------------------------------------------------------------------
 local previewFrame = CreateFrame("Frame", "NSBT_PreviewFrame", UIParent, "BackdropTemplate")
 previewFrame:SetSize(300, 340)
@@ -404,10 +379,15 @@ local function CreateOptionsPanel()
     desc:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
     desc:SetText("Shows a random meme during DBM/BigWigs break timers.")
 
-    -- Lock checkbox
-    local lockCheck = CreateFrame("CheckButton", "NSBT_LockCheck", panel, "InterfaceOptionsCheckButtonTemplate")
+    -- Lock checkbox (UICheckButtonTemplate)
+    local lockCheck = CreateFrame("CheckButton", "NSBT_LockCheck", panel, "UICheckButtonTemplate")
     lockCheck:SetPoint("TOPLEFT", desc, "BOTTOMLEFT", -2, -12)
-    lockCheck.Text:SetText("Lock frame (prevent moving and resizing)")
+
+    local lockLabel = lockCheck:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+    lockLabel:SetPoint("LEFT", lockCheck, "RIGHT", 4, 1)
+    lockLabel:SetText("Lock frame (prevent moving and resizing)")
+    lockCheck.label = lockLabel
+
     lockCheck:SetChecked(NoSkillBreakTimerDB and NoSkillBreakTimerDB.locked or false)
     lockCheck:SetScript("OnClick", function(self)
         NoSkillBreakTimerDB.locked = self:GetChecked()
@@ -423,6 +403,7 @@ local function CreateOptionsPanel()
         ToggleTest()
     end)
 
+    -- Reset button
     local resetBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
     resetBtn:SetSize(120, 24)
     resetBtn:SetPoint("LEFT", testBtn, "RIGHT", 8, 0)
@@ -444,6 +425,17 @@ local function CreateOptionsPanel()
     memeDesc:SetPoint("LEFT", memeHeader, "RIGHT", 8, 0)
     memeDesc:SetText("(uncheck to disable, click Preview to see)")
 
+    -- Select All / Deselect All buttons
+    local selectAllBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    selectAllBtn:SetSize(90, 20)
+    selectAllBtn:SetPoint("LEFT", memeDesc, "RIGHT", 12, 0)
+    selectAllBtn:SetText("Select All")
+
+    local deselectAllBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
+    deselectAllBtn:SetSize(100, 20)
+    deselectAllBtn:SetPoint("LEFT", selectAllBtn, "RIGHT", 4, 0)
+    deselectAllBtn:SetText("Deselect All")
+
     -- Scroll frame for meme list
     local scrollFrame = CreateFrame("ScrollFrame", "NSBT_MemeScroll", panel, "UIPanelScrollFrameTemplate")
     scrollFrame:SetPoint("TOPLEFT", memeHeader, "BOTTOMLEFT", 0, -8)
@@ -455,18 +447,23 @@ local function CreateOptionsPanel()
 
     -- Build meme rows
     local ROW_HEIGHT = 26
-    local PREVIEW_X = 150 -- fixed x position for all Preview buttons
-    local rows = {}
+    local PREVIEW_X = 150
+    local checkboxes = {}
 
     for i, memeName in ipairs(MEME_FILES) do
         local row = CreateFrame("Frame", nil, scrollChild)
         row:SetSize(400, ROW_HEIGHT)
         row:SetPoint("TOPLEFT", scrollChild, "TOPLEFT", 0, -(i - 1) * ROW_HEIGHT)
 
-        -- Checkbox
-        local cb = CreateFrame("CheckButton", "NSBT_Meme_" .. memeName, row, "InterfaceOptionsCheckButtonTemplate")
+        -- Checkbox (UICheckButtonTemplate)
+        local cb = CreateFrame("CheckButton", "NSBT_Meme_" .. memeName, row, "UICheckButtonTemplate")
         cb:SetPoint("LEFT", row, "LEFT", 0, 0)
-        cb.Text:SetText(memeName)
+
+        local cbLabel = cb:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+        cbLabel:SetPoint("LEFT", cb, "RIGHT", 4, 1)
+        cbLabel:SetText(memeName)
+        cb.label = cbLabel
+
         cb:SetChecked(NoSkillBreakTimerDB.memes[memeName] ~= false)
         cb:SetScript("OnClick", function(self)
             NoSkillBreakTimerDB.memes[memeName] = self:GetChecked()
@@ -483,35 +480,28 @@ local function CreateOptionsPanel()
             previewFrame:Show()
         end)
 
-        rows[i] = row
+        checkboxes[memeName] = cb
     end
 
-    -- Set scroll child height
     scrollChild:SetHeight(#MEME_FILES * ROW_HEIGHT)
     scrollChild:SetWidth(400)
 
-    -- Select All / Deselect All buttons
-    local selectAllBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    selectAllBtn:SetSize(90, 20)
-    selectAllBtn:SetPoint("LEFT", memeDesc, "RIGHT", 12, 0)
-    selectAllBtn:SetText("Select All")
+    -- Wire up Select All / Deselect All
     selectAllBtn:SetScript("OnClick", function()
         for _, memeName in ipairs(MEME_FILES) do
             NoSkillBreakTimerDB.memes[memeName] = true
-            local cb = _G["NSBT_Meme_" .. memeName]
-            if cb then cb:SetChecked(true) end
+            if checkboxes[memeName] then
+                checkboxes[memeName]:SetChecked(true)
+            end
         end
     end)
 
-    local deselectAllBtn = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    deselectAllBtn:SetSize(100, 20)
-    deselectAllBtn:SetPoint("LEFT", selectAllBtn, "RIGHT", 4, 0)
-    deselectAllBtn:SetText("Deselect All")
     deselectAllBtn:SetScript("OnClick", function()
         for _, memeName in ipairs(MEME_FILES) do
             NoSkillBreakTimerDB.memes[memeName] = false
-            local cb = _G["NSBT_Meme_" .. memeName]
-            if cb then cb:SetChecked(false) end
+            if checkboxes[memeName] then
+                checkboxes[memeName]:SetChecked(false)
+            end
         end
     end)
 
@@ -589,17 +579,18 @@ initFrame:SetScript("OnEvent", function(self, event)
     HookDBMCallbacks()
     HookBigWigs()
 
-    if not DBM or not bigWigsHooked then
+    -- Late-load hook for DBM/BigWigs if they load after us
+    if not dbmHooked or not bigWigsHooked then
         local lateLoader = CreateFrame("Frame")
         lateLoader:RegisterEvent("ADDON_LOADED")
         lateLoader:SetScript("OnEvent", function(self2, ev, addon)
-            if DBM then
+            if not dbmHooked and DBM then
                 HookDBMCallbacks()
             end
             if not bigWigsHooked and (BigWigsLoader or BigWigs) then
                 HookBigWigs()
             end
-            if DBM and bigWigsHooked then
+            if dbmHooked and bigWigsHooked then
                 self2:UnregisterAllEvents()
             end
         end)
