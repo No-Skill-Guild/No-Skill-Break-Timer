@@ -247,18 +247,21 @@ local function HookDBMCallbacks()
 
     if DBM.RegisterCallback then
         DBM:RegisterCallback("DBM_TimerStart", function(event, id, msg, timer, icon, timerType, spellId, dbmType, ...)
+            timerType = scrubsecretvalues(timerType)
             if timerType == "break" and timer and timer > 0 then
                 StartBreak(timer, "DBM callback")
             end
         end)
         DBM:RegisterCallback("DBM_TimerStop", function(event, id)
-            if id and type(id) == "string" and id:lower():find("^break") then
+            id = scrubsecretvalues(id)
+            if type(id) == "string" and id:lower():find("^break") then
                 StopBreak()
             end
         end)
     end
 
     -- hooksecurefunc on known break timer functions (receive minutes)
+    -- Note: timer <= 60 is assumed to be minutes since /dbm break takes minutes
     for _, funcName in ipairs({"StartBreakTimer", "breakTimerStart", "CreateBreakTimer"}) do
         if DBM[funcName] then
             hooksecurefunc(DBM, funcName, function(self, timer, ...)
@@ -301,10 +304,12 @@ end)
 -- HOOK 3: BigWigs break bar via callback system
 -- Matches any text starting with "Break". Combat guard in StartBreak
 -- is the primary protection against false positives.
+-- Uses scrubsecretvalues() to handle Midnight's tainted strings.
 ---------------------------------------------------------------------
 local bigWigsHooked = false
 
 local function IsLikelyBreakText(s)
+    s = scrubsecretvalues(s)
     if type(s) ~= "string" then return false end
     return s:lower():find("^break") ~= nil
 end
