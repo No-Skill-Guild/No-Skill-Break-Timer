@@ -39,7 +39,6 @@ local MEME_FILES = {
 	"Paint9",
 	"Paint10",
 	"Paint11",
-	"Paint12",
 }
 
 local MIN_SIZE = 200
