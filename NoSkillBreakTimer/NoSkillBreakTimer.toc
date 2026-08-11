@@ -1,8 +1,8 @@
-## Interface: 120001
+## Interface: 120100, 120007
 ## Title: No Skill Break Timer
 ## Notes: Displays random meme .tga images during DBM/BigWigs break timers.
 ## IconTexture: Interface\AddOns\NoSkillBreakTimer\Memes\NS_Logo
-## Version: 1.1.7
+## Version: 1.1.8
 ## Author: Chaotix
 ## SavedVariables: NoSkillBreakTimerDB
 
