@@ -1,0 +1,3 @@
+package-as: NoSkillBreakTimer
+ignore:
+  - README.md

@@ -8,8 +8,8 @@ A World of Warcraft addon that displays a random meme image whenever a break tim
 Paste the repo URL into WoWUp's **Get Addons** search to install and receive automatic updates.
 
 ### Manual
-1. Download or clone this repo
-2. Copy the `NoSkillBreakTimer` folder into your WoW addons directory:
+1. Download the zip from the latest [Release](../../releases)
+2. Extract the `NoSkillBreakTimer` folder into your WoW addons directory:
    ```
    World of Warcraft/_retail_/Interface/AddOns/
    ```
@@ -62,3 +62,14 @@ All settings are account-wide and persist between sessions.
 ## Compatibility
 
 This is a cosmetic/utility addon and is fully compatible with WoW Midnight's addon API restrictions. It does not read or interact with any combat data.
+
+## Releasing
+
+Releases are built automatically by [BigWigsMods/packager](https://github.com/BigWigsMods/packager) (`.github/workflows/release.yml`). Push a tag and a GitHub Release with the packaged zip is created, which WoWUp picks up:
+
+```
+git tag v1.1.9
+git push origin v1.1.9
+```
+
+The tag becomes the addon version (`@project-version@` in the `.toc`).
