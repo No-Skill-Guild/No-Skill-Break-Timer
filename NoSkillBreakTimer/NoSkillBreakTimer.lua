@@ -43,46 +43,162 @@ local MEME_FILES = {
 }
 
 local MIN_SIZE = 200
+local MIN_WIDTH = 320 -- room for the countdown, header and close button
 local MAX_SIZE = 900
+
+---------------------------------------------------------------------
+-- Flat "modern" skin (ElvUI-style: dark fill, 1px borders, accent line)
+---------------------------------------------------------------------
+local FONT = "Fonts\\ARIALN.TTF"
+local TITLE_HEIGHT = 24
+local HEADER_HEIGHT = 36 -- taller title bar for the main frame's big header
+local PADDING = 6
+local ACCENT = { r = 0.0, g = 0.8, b = 0.4 }
+local BG_COLOR = { r = 0.06, g = 0.06, b = 0.06, a = 0.92 }
+local TITLE_COLOR = { r = 0.10, g = 0.10, b = 0.10, a = 1 }
+local BORDER_COLOR = { r = 0, g = 0, b = 0, a = 1 }
+local INSET_BORDER_COLOR = { r = 0.20, g = 0.20, b = 0.20, a = 1 }
+
+-- 1 physical pixel border drawn with four textures so it stays crisp at any UI scale
+local function CreatePixelBorder(f, color)
+    local edges = {}
+    for i = 1, 4 do
+        local t = f:CreateTexture(nil, "BORDER", nil, 7)
+        t:SetColorTexture(color.r, color.g, color.b, color.a)
+        edges[i] = t
+    end
+    local top, bottom, left, right = edges[1], edges[2], edges[3], edges[4]
+    top:SetPoint("TOPLEFT"); top:SetPoint("TOPRIGHT")
+    bottom:SetPoint("BOTTOMLEFT"); bottom:SetPoint("BOTTOMRIGHT")
+    left:SetPoint("TOPLEFT"); left:SetPoint("BOTTOMLEFT")
+    right:SetPoint("TOPRIGHT"); right:SetPoint("BOTTOMRIGHT")
+    PixelUtil.SetHeight(top, 1, 1)
+    PixelUtil.SetHeight(bottom, 1, 1)
+    PixelUtil.SetWidth(left, 1, 1)
+    PixelUtil.SetWidth(right, 1, 1)
+end
+
+local function CreateFlatCloseButton(parent, onClick)
+    local btn = CreateFrame("Button", nil, parent)
+    btn:SetSize(TITLE_HEIGHT, TITLE_HEIGHT)
+    local lines = {}
+    for i, angle in ipairs({ 45, -45 }) do
+        local line = btn:CreateTexture(nil, "ARTWORK")
+        line:SetColorTexture(1, 1, 1, 1)
+        line:SetSize(12, 2)
+        line:SetPoint("CENTER")
+        line:SetRotation(math.rad(angle))
+        line:SetVertexColor(0.7, 0.7, 0.7)
+        lines[i] = line
+    end
+    btn:SetScript("OnEnter", function()
+        for _, line in ipairs(lines) do line:SetVertexColor(1, 0.3, 0.3) end
+    end)
+    btn:SetScript("OnLeave", function()
+        for _, line in ipairs(lines) do line:SetVertexColor(0.7, 0.7, 0.7) end
+    end)
+    btn:SetScript("OnClick", onClick)
+    return btn
+end
+
+-- Skins a frame and returns (titleBar, titleText, content, accent) where
+-- content is a bordered inset area for the meme texture and accent is the
+-- line under the title bar.
+local function ApplyModernSkin(f, titleHeight)
+    titleHeight = titleHeight or TITLE_HEIGHT
+    local bg = f:CreateTexture(nil, "BACKGROUND")
+    bg:SetAllPoints()
+    bg:SetColorTexture(BG_COLOR.r, BG_COLOR.g, BG_COLOR.b, BG_COLOR.a)
+    CreatePixelBorder(f, BORDER_COLOR)
+
+    local titleBar = CreateFrame("Frame", nil, f)
+    titleBar:SetPoint("TOPLEFT", 1, -1)
+    titleBar:SetPoint("TOPRIGHT", -1, -1)
+    titleBar:SetHeight(titleHeight)
+    local titleBg = titleBar:CreateTexture(nil, "BACKGROUND")
+    titleBg:SetAllPoints()
+    titleBg:SetColorTexture(1, 1, 1, 1)
+    titleBg:SetGradient("VERTICAL",
+        CreateColor(TITLE_COLOR.r * 0.6, TITLE_COLOR.g * 0.6, TITLE_COLOR.b * 0.6, TITLE_COLOR.a),
+        CreateColor(TITLE_COLOR.r * 1.5, TITLE_COLOR.g * 1.5, TITLE_COLOR.b * 1.5, TITLE_COLOR.a))
+
+    local accent = titleBar:CreateTexture(nil, "ARTWORK")
+    accent:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT")
+    accent:SetPoint("TOPRIGHT", titleBar, "BOTTOMRIGHT")
+    accent:SetColorTexture(ACCENT.r, ACCENT.g, ACCENT.b, 1)
+    PixelUtil.SetHeight(accent, 1, 1)
+
+    local titleText = titleBar:CreateFontString(nil, "OVERLAY")
+    titleText:SetFont(FONT, 14, "OUTLINE")
+    titleText:SetShadowOffset(0, 0)
+    titleText:SetPoint("LEFT", titleBar, "LEFT", 8, 0)
+
+    local closeButton = CreateFlatCloseButton(titleBar, function() f:Hide() end)
+    closeButton:SetPoint("RIGHT", titleBar, "RIGHT", 0, 0)
+
+    local content = CreateFrame("Frame", nil, f)
+    content:SetPoint("TOPLEFT", titleBar, "BOTTOMLEFT", PADDING - 1, -PADDING)
+    content:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -PADDING, PADDING)
+    local contentBg = content:CreateTexture(nil, "BACKGROUND")
+    contentBg:SetAllPoints()
+    contentBg:SetColorTexture(0, 0, 0, 0.6)
+    CreatePixelBorder(content, INSET_BORDER_COLOR)
+
+    return titleBar, titleText, content, accent
+end
 
 ---------------------------------------------------------------------
 -- Main display frame
 ---------------------------------------------------------------------
-local frame = CreateFrame("Frame", "NoSkillBreakTimerFrame", UIParent, "BackdropTemplate")
+local frame = CreateFrame("Frame", "NoSkillBreakTimerFrame", UIParent)
 frame:SetSize(512, 560)
 frame:SetPoint("CENTER")
 frame:SetFrameStrata("DIALOG")
 frame:EnableMouse(true)
 frame:Hide()
 
-frame:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-    tile = true, tileSize = 32, edgeSize = 32,
-    insets = { left = 8, right = 8, top = 8, bottom = 8 },
-})
+local titleBar, headerText, memeContent, titleAccent = ApplyModernSkin(frame, HEADER_HEIGHT)
 
-local closeBtn = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-closeBtn:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -4, -4)
-closeBtn:SetScript("OnClick", function() frame:Hide() end)
+-- Accent-colored header with a soft drop shadow instead of a heavy outline
+headerText:SetFont(FONT, 22, "")
+headerText:SetShadowColor(0, 0, 0, 0.9)
+headerText:SetShadowOffset(1, -1)
+headerText:ClearAllPoints()
+headerText:SetPoint("CENTER", titleBar, "CENTER", 0, 0)
+headerText:SetTextColor(ACCENT.r, ACCENT.g, ACCENT.b)
+headerText:SetText("BREAK TIME")
 
-local headerText = frame:CreateFontString(nil, "OVERLAY")
-headerText:SetFont("Fonts\\FRIZQT__.TTF", 28, "OUTLINE")
-headerText:SetPoint("TOP", frame, "TOP", 0, -16)
-headerText:SetText("|cff00ff00BREAK TIME|r")
+-- Remaining-time countdown in the top left
+local timerText = titleBar:CreateFontString(nil, "OVERLAY")
+timerText:SetFont(FONT, 16, "")
+timerText:SetShadowColor(0, 0, 0, 0.9)
+timerText:SetShadowOffset(1, -1)
+timerText:SetPoint("LEFT", titleBar, "LEFT", 10, 0)
 
-local memeTexture = frame:CreateTexture(nil, "ARTWORK")
-memeTexture:SetPoint("TOP", headerText, "BOTTOM", 0, -8)
-memeTexture:SetPoint("LEFT", frame, "LEFT", 16, 0)
-memeTexture:SetPoint("RIGHT", frame, "RIGHT", -16, 0)
-memeTexture:SetPoint("BOTTOM", frame, "BOTTOM", 0, 16)
+-- The accent line doubles as a progress bar that drains as the break runs
+PixelUtil.SetHeight(titleAccent, 4, 4)
+titleAccent:SetAlpha(0.2)
+local progressBar = CreateFrame("StatusBar", nil, titleBar)
+progressBar:SetAllPoints(titleAccent)
+progressBar:SetStatusBarTexture("Interface\\Buttons\\WHITE8x8")
+progressBar:SetStatusBarColor(ACCENT.r, ACCENT.g, ACCENT.b)
+progressBar:SetMinMaxValues(0, 1)
+progressBar:SetValue(1)
+
+local memeTexture = memeContent:CreateTexture(nil, "ARTWORK")
+memeTexture:SetPoint("TOPLEFT", 1, -1)
+memeTexture:SetPoint("BOTTOMRIGHT", -1, 1)
 
 local resizer = CreateFrame("Button", nil, frame)
-resizer:SetSize(16, 16)
-resizer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -6, 6)
+resizer:SetSize(14, 14)
+resizer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -2, 2)
+resizer:SetFrameLevel(memeContent:GetFrameLevel() + 2)
 resizer:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
 resizer:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
 resizer:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+resizer:GetNormalTexture():SetDesaturated(true)
+resizer:GetNormalTexture():SetVertexColor(0.6, 0.6, 0.6)
+resizer:GetPushedTexture():SetVertexColor(ACCENT.r, ACCENT.g, ACCENT.b)
 
 ---------------------------------------------------------------------
 -- Lock/Unlock
@@ -104,7 +220,7 @@ local function ApplyLockState()
     frame:SetMovable(not locked)
     frame:SetResizable(not locked)
     if not locked then
-        frame:SetResizeBounds(MIN_SIZE, MIN_SIZE + 48, MAX_SIZE, MAX_SIZE + 48)
+        frame:SetResizeBounds(MIN_WIDTH, MIN_SIZE + 48, MAX_SIZE, MAX_SIZE + 48)
     end
     frame:RegisterForDrag(not locked and "LeftButton" or "")
     resizer:SetShown(not locked)
@@ -152,6 +268,49 @@ local isRunning = false
 local isTesting = false
 local hideTimer = nil
 local lastMemeIndex = 0
+local breakDuration = 0
+local breakEndTime = 0
+
+---------------------------------------------------------------------
+-- Countdown display
+---------------------------------------------------------------------
+local TEST_DURATION = 120 -- demo countdown shown in test mode
+local UPDATE_INTERVAL = 0.1
+local WARNING_SECONDS = 60  -- yellow below this
+local CRITICAL_SECONDS = 30 -- red below this
+
+local function FormatTime(seconds)
+    seconds = math.max(0, math.ceil(seconds))
+    return string.format("%d:%02d", math.floor(seconds / 60), seconds % 60)
+end
+
+local function UpdateCountdown()
+    local remaining = math.max(0, breakEndTime - GetTime())
+    if remaining < CRITICAL_SECONDS then
+        timerText:SetTextColor(1, 0.3, 0.3)
+    elseif remaining < WARNING_SECONDS then
+        timerText:SetTextColor(1, 0.85, 0.2)
+    else
+        timerText:SetTextColor(ACCENT.r, ACCENT.g, ACCENT.b)
+    end
+    timerText:SetText(FormatTime(remaining))
+    progressBar:SetValue(breakDuration > 0 and remaining / breakDuration or 0)
+end
+
+local function SetCountdown(seconds)
+    breakDuration = seconds
+    breakEndTime = GetTime() + seconds
+    UpdateCountdown()
+end
+
+local sinceLastUpdate = 0
+frame:SetScript("OnUpdate", function(self, elapsed)
+    sinceLastUpdate = sinceLastUpdate + elapsed
+    if sinceLastUpdate >= UPDATE_INTERVAL then
+        sinceLastUpdate = 0
+        UpdateCountdown()
+    end
+end)
 
 ---------------------------------------------------------------------
 -- Meme selection
@@ -184,7 +343,7 @@ local function StartBreak(seconds, source)
 
     isTesting = false
     isRunning = true
-    headerText:SetText("|cff00ff00BREAK TIME|r")
+    SetCountdown(seconds)
     ShowRandomMeme()
     frame:Show()
 
@@ -209,6 +368,20 @@ local function StopBreak()
     frame:Hide()
 end
 
+-- Keep state in sync no matter how the frame is hidden (close button,
+-- timer expiry, StopBreak) so Toggle Test never gets stuck.
+-- IsShown() stays true when only UIParent is hidden (Alt+Z, cinematics),
+-- so ignore those and let the break keep running.
+frame:SetScript("OnHide", function(self)
+    if self:IsShown() then return end
+    isTesting = false
+    isRunning = false
+    if hideTimer then
+        hideTimer:Cancel()
+        hideTimer = nil
+    end
+end)
+
 local function ToggleTest()
     if isTesting then
         isTesting = false
@@ -218,7 +391,7 @@ local function ToggleTest()
         return
     else
         isTesting = true
-        headerText:SetText("|cff00ff00BREAK TIME|r")
+        SetCountdown(TEST_DURATION)
         ShowRandomMeme()
         frame:Show()
     end
@@ -338,7 +511,7 @@ end
 ---------------------------------------------------------------------
 -- Preview frame (popup for previewing memes in options)
 ---------------------------------------------------------------------
-local previewFrame = CreateFrame("Frame", "NSBT_PreviewFrame", UIParent, "BackdropTemplate")
+local previewFrame = CreateFrame("Frame", "NSBT_PreviewFrame", UIParent)
 previewFrame:SetSize(300, 340)
 previewFrame:SetPoint("CENTER")
 previewFrame:SetFrameStrata("TOOLTIP")
@@ -349,25 +522,12 @@ previewFrame:SetScript("OnDragStart", previewFrame.StartMoving)
 previewFrame:SetScript("OnDragStop", previewFrame.StopMovingOrSizing)
 previewFrame:Hide()
 
-previewFrame:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background-Dark",
-    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
-    tile = true, tileSize = 32, edgeSize = 32,
-    insets = { left = 8, right = 8, top = 8, bottom = 8 },
-})
+local _, previewTitle, previewContent = ApplyModernSkin(previewFrame)
+previewTitle:SetTextColor(0.9, 0.9, 0.9)
 
-local previewClose = CreateFrame("Button", nil, previewFrame, "UIPanelCloseButton")
-previewClose:SetPoint("TOPRIGHT", previewFrame, "TOPRIGHT", -4, -4)
-previewClose:SetScript("OnClick", function() previewFrame:Hide() end)
-
-local previewTitle = previewFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-previewTitle:SetPoint("TOP", previewFrame, "TOP", 0, -12)
-
-local previewTexture = previewFrame:CreateTexture(nil, "ARTWORK")
-previewTexture:SetPoint("TOP", previewTitle, "BOTTOM", 0, -8)
-previewTexture:SetPoint("LEFT", previewFrame, "LEFT", 16, 0)
-previewTexture:SetPoint("RIGHT", previewFrame, "RIGHT", -16, 0)
-previewTexture:SetPoint("BOTTOM", previewFrame, "BOTTOM", 0, 16)
+local previewTexture = previewContent:CreateTexture(nil, "ARTWORK")
+previewTexture:SetPoint("TOPLEFT", 1, -1)
+previewTexture:SetPoint("BOTTOMRIGHT", -1, 1)
 
 ---------------------------------------------------------------------
 -- Options panel
