@@ -6,6 +6,7 @@ local ADDON_NAME = "NoSkillBreakTimer"
 local MEME_PATH = "Interface\\AddOns\\NoSkillBreakTimer\\Memes\\"
 
 local MEME_FILES = {
+	"Airnag",
     "Bingo1",
     "Cyc1",
     "Elijah1",
